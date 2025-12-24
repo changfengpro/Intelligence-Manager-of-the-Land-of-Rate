@@ -209,7 +209,7 @@ class RecognitionEngine:
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("率土情报管家 v7.7.5")
+        self.root.title("率土情报管家 v1.0")
         self.root.geometry("1200x800")
         self.root.configure(bg="#f5f6f7")
         
