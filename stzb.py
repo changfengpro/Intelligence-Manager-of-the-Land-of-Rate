@@ -109,20 +109,20 @@ class SimilarityDialog(Toplevel):
         super().__init__(parent)
         self.title("重名检查")
         self.geometry("450x250")
+        self.configure(bg="#fdfcfb")
         self.result = None
-        # 默认不勾选：value=False
         self.trust_var = BooleanVar(value=False)
         
-        Label(self, text="⚠️ 发现高度相似玩家名", font=("微软雅黑", 12, "bold"), fg="#e67e22").pack(pady=10)
-        Label(self, text=f"当前识别: {new_name}", font=("微软雅黑", 10)).pack()
-        Label(self, text=f"数据库已有: {old_name}", font=("微软雅黑", 10, "bold"), fg="#2980b9").pack()
+        Label(self, text="⚠️ 发现高度相似玩家名", font=("微软雅黑", 12, "bold"), fg="#e67e22", bg="#fdfcfb").pack(pady=15)
+        Label(self, text=f"识别结果: {new_name}", font=("微软雅黑", 10), bg="#fdfcfb").pack()
+        Label(self, text=f"数据库已有: {old_name}", font=("微软雅黑", 10, "bold"), fg="#2980b9", bg="#fdfcfb").pack(pady=5)
         
-        btn_f = Frame(self)
-        btn_f.pack(pady=15)
-        ttk.Button(btn_f, text=f"使用新名 (覆盖旧名)", command=lambda: self.done("use_new")).pack(side=LEFT, padx=10)
-        ttk.Button(btn_f, text=f"保留旧名 (忽略新名)", command=lambda: self.done("keep_old")).pack(side=LEFT, padx=10)
+        btn_f = Frame(self, bg="#fdfcfb")
+        btn_f.pack(pady=20)
+        ttk.Button(btn_f, text=f"使用新名", command=lambda: self.done("use_new"), width=15).pack(side=LEFT, padx=10)
+        ttk.Button(btn_f, text=f"保留旧名", command=lambda: self.done("keep_old"), width=15).pack(side=LEFT, padx=10)
         
-        Checkbutton(self, text="不再询问 (记录此选择并加入信任名单)", variable=self.trust_var).pack()
+        Checkbutton(self, text="记住选择，不再询问", variable=self.trust_var, bg="#fdfcfb", font=("微软雅黑", 9)).pack()
         self.grab_set()
 
     def done(self, action):
@@ -133,16 +133,17 @@ class TrustManager(Toplevel):
     def __init__(self, parent, db, callback):
         super().__init__(parent)
         self.title("白名单管理")
-        self.geometry("300x400")
+        self.geometry("350x450")
         self.db = db
         self.callback = callback
         
-        Label(self, text="已信任的名字列表", font=("微软雅黑", 10, "bold")).pack(pady=5)
-        self.listbox = Listbox(self, font=("微软雅黑", 10))
-        self.listbox.pack(fill=BOTH, expand=True, padx=10, pady=5)
+        Label(self, text="🛡 已信任的玩家 ID", font=("微软雅黑", 11, "bold"), pady=10).pack()
+        
+        self.listbox = Listbox(self, font=("微软雅黑", 10), selectbackground="#3498db", borderwidth=0, highlightthickness=1)
+        self.listbox.pack(fill=BOTH, expand=True, padx=20, pady=5)
         
         self.refresh()
-        ttk.Button(self, text="移除选中信任", command=self.remove_name).pack(pady=10)
+        ttk.Button(self, text="移除选中记录", command=self.remove_name).pack(pady=15)
 
     def refresh(self):
         self.listbox.delete(0, END)
@@ -208,17 +209,32 @@ class RecognitionEngine:
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("率土情报管家 v7.7.3")
-        self.root.geometry("1100x750")
+        self.root.title("率土情报管家 v7.7.5")
+        self.root.geometry("1200x800")
+        self.root.configure(bg="#f5f6f7")
+        
         self.db = DatabaseManager()
         self.engine = RecognitionEngine()
         self.config_file = "config.json"
         self.config = {"icon_reg": None, "name_reg": None, "gen_regs": [], "block_reg": None}
         self.is_monitoring = False
         
+        self._set_style()
         self._load_saved_config()
         self._build_ui()
         self.refresh_player_list()
+
+    def _set_style(self):
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # 定义配色
+        style.configure("Treeview", font=("微软雅黑", 10), rowheight=30, background="white", fieldbackground="white")
+        style.map("Treeview", background=[('selected', '#3498db')])
+        style.configure("Treeview.Heading", font=("微软雅黑", 10, "bold"), background="#ecf0f1", foreground="#2c3e50")
+        
+        style.configure("Action.TButton", font=("微软雅黑", 9))
+        style.configure("TEntry", padding=5)
 
     def _load_saved_config(self):
         if os.path.exists(self.config_file):
@@ -234,86 +250,113 @@ class App:
             json.dump(self.config, f, ensure_ascii=False)
 
     def _build_ui(self):
-        top = Frame(self.root, bg="white", height=60)
-        top.pack(fill=X); top.pack_propagate(False)
+        # --- 顶部导航栏 ---
+        top_bar = Frame(self.root, bg="#2c3e50", height=70)
+        top_bar.pack(fill=X); top_bar.pack_propagate(False)
         
-        btn_f = Frame(top, bg="white")
-        btn_f.pack(side=LEFT, padx=10)
-        ttk.Button(btn_f, text="0.框选战报", command=self.set_icon_reg).pack(side=LEFT, padx=2)
-        ttk.Button(btn_f, text="1.框选玩家", command=self.set_name_reg).pack(side=LEFT, padx=2)
-        ttk.Button(btn_f, text="2.框选武将", command=self.set_gen_regs_auto).pack(side=LEFT, padx=2)
-        ttk.Button(btn_f, text="3.框选干扰", command=self.set_block_reg).pack(side=LEFT, padx=2)
-        ttk.Button(btn_f, text="🛡 管理信任名单", command=self.open_trust_mgr).pack(side=LEFT, padx=10)
-        
-        self.status_label = Label(top, text="● 待命", bg="white", font=("微软雅黑", 10), fg="gray")
-        self.status_label.pack(side=LEFT, padx=20)
-        
-        self.btn_run = Button(top, text="▶ 开始监控", bg="#27ae60", fg="white", font=("微软雅黑", 10, "bold"), command=self.toggle, width=12)
-        self.btn_run.pack(side=RIGHT, padx=20)
+        title_label = Label(top_bar, text="🏰 率土情报管家", font=("微软雅黑", 14, "bold"), fg="white", bg="#2c3e50")
+        title_label.pack(side=LEFT, padx=20)
 
-        pw = PanedWindow(self.root, orient=HORIZONTAL, bg="#ddd")
-        pw.pack(fill=BOTH, expand=True, padx=5, pady=5)
+        btn_f = Frame(top_bar, bg="#2c3e50")
+        btn_f.pack(side=LEFT, padx=10)
         
-        left_container = Frame(pw, bg="white")
-        pw.add(left_container, width=300)
+        for idx, (txt, cmd) in enumerate([("1. 框战报", self.set_icon_reg), ("2. 框玩家", self.set_name_reg), 
+                                        ("3. 框武将", self.set_gen_regs_auto), ("4. 框干扰", self.set_block_reg)]):
+            ttk.Button(btn_f, text=txt, command=cmd, style="Action.TButton", width=10).pack(side=LEFT, padx=3)
         
-        search_f = Frame(left_container, bg="#f5f5f5", padx=5, pady=5)
+        ttk.Button(btn_f, text="🛡 白名单", command=self.open_trust_mgr, width=10).pack(side=LEFT, padx=15)
+
+        self.btn_run = Button(top_bar, text="▶ 开始监控", bg="#27ae60", fg="white", font=("微软雅黑", 10, "bold"), 
+                             command=self.toggle, width=15, relief=FLAT, cursor="hand2")
+        self.btn_run.pack(side=RIGHT, padx=30)
+        
+        self.status_label = Label(top_bar, text="● 系统就绪", font=("微软雅黑", 10), fg="#bdc3c7", bg="#2c3e50")
+        self.status_label.pack(side=RIGHT, padx=10)
+
+        # --- 主体内容区 ---
+        main_frame = Frame(self.root, bg="#f5f6f7")
+        main_frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
+
+        pw = PanedWindow(main_frame, orient=HORIZONTAL, bg="#dcdde1", sashwidth=4)
+        pw.pack(fill=BOTH, expand=True)
+        
+        # 左侧列表：玩家库
+        left_f = Frame(pw, bg="white")
+        pw.add(left_f, width=320)
+        
+        search_f = Frame(left_f, bg="#f5f6f7", padx=10, pady=10)
         search_f.pack(fill=X)
-        Label(search_f, text="🔍", bg="#f5f5f5").pack(side=LEFT)
         self.search_var = StringVar()
         self.search_var.trace("w", lambda *args: self.refresh_player_list())
-        self.search_entry = ttk.Entry(search_f, textvariable=self.search_var)
-        self.search_entry.pack(side=LEFT, fill=X, expand=True, padx=2)
-        ttk.Button(search_f, text="X", width=2, command=lambda: self.search_var.set("")).pack(side=RIGHT)
+        search_entry = ttk.Entry(search_f, textvariable=self.search_var)
+        search_entry.pack(side=LEFT, fill=X, expand=True)
+        ttk.Button(search_f, text="清空", width=5, command=lambda: self.search_var.set("")).pack(side=LEFT, padx=5)
 
-        self.player_list = ttk.Treeview(left_container, columns=("name"), show="headings")
-        self.player_list.heading("name", text="玩家 ID")
-        self.player_list.pack(fill=BOTH, expand=True)
+        self.player_list = ttk.Treeview(left_f, columns=("name"), show="headings", selectmode="browse")
+        self.player_list.heading("name", text="玩家库 (点击查看详情)")
+        self.player_list.pack(fill=BOTH, expand=True, padx=5, pady=5)
         self.player_list.bind("<<TreeviewSelect>>", self.on_player_select)
-        self.player_list.bind("<Button-3>", self.show_player_menu) 
+        self.player_list.bind("<Button-3>", self.show_player_menu)
         
+        # 右侧列表：阵容详情
         right_f = Frame(pw, bg="white")
         pw.add(right_f)
+        
+        detail_title = Label(right_f, text="🗃 侦察记录详情", font=("微软雅黑", 11, "bold"), bg="white", fg="#34495e", pady=10)
+        detail_title.pack(anchor=W, padx=15)
+
         self.team_table = ttk.Treeview(right_f, columns=("time", "b", "m", "f", "hash"), show="headings")
-        for c, t in zip(["time", "b", "m", "f"], ["录入时间", "大营", "中军", "前锋"]):
-            self.team_table.heading(c, text=t); self.team_table.column(c, width=120)
-        self.team_table.heading("hash", text="Hash"); self.team_table.column("hash", width=0, stretch=NO)
-        self.team_table.pack(fill=BOTH, expand=True)
+        self.team_table.heading("time", text="记录时间")
+        self.team_table.heading("b", text="大营"); self.team_table.heading("m", text="中军"); self.team_table.heading("f", text="前锋")
+        self.team_table.column("time", width=160, anchor=CENTER)
+        self.team_table.column("b", width=120, anchor=CENTER); self.team_table.column("m", width=120, anchor=CENTER); self.team_table.column("f", width=120, anchor=CENTER)
+        self.team_table.column("hash", width=0, stretch=NO)
+        
+        self.team_table.pack(fill=BOTH, expand=True, padx=10, pady=5)
         self.team_table.bind("<Button-3>", self.show_team_menu)
+        
+        # 底部美化
+        footer = Label(self.root, text="操作提示：右键点击列表项可进行删除 | 建议保持游戏窗口置顶", 
+                       font=("微软雅黑", 8), fg="#95a5a6", bg="#f5f6f7", pady=5)
+        footer.pack()
 
     def refresh_player_list(self):
         search_term = self.search_var.get().strip().lower()
         self.player_list.delete(*self.player_list.get_children())
         all_names = self.db.get_all_player_names()
-        for n in all_names:
+        for i, n in enumerate(all_names):
             if not search_term or search_term in n.lower():
-                self.player_list.insert("", END, values=(n,))
+                tag = 'even' if i % 2 == 0 else 'odd'
+                self.player_list.insert("", END, values=(n,), tags=(tag,))
+        self.player_list.tag_configure('odd', background='#f9f9f9')
 
     def toggle(self):
-        if not self.config["name_reg"]: return messagebox.showwarning("警告", "请先完成框选")
+        if not self.config["name_reg"]: return messagebox.showwarning("提醒", "请先完成各项区域框选")
         self.is_monitoring = not self.is_monitoring
-        self.btn_run.config(text="⏹ 停止" if self.is_monitoring else "▶ 开始监控", bg="#c0392b" if self.is_monitoring else "#27ae60")
-        if self.is_monitoring: threading.Thread(target=self.monitor_thread, daemon=True).start()
+        if self.is_monitoring:
+            self.btn_run.config(text="⏹ 停止监控", bg="#e74c3c")
+            self.status_label.config(text="● 正在监控中", fg="#2ecc71")
+            threading.Thread(target=self.monitor_thread, daemon=True).start()
+        else:
+            self.btn_run.config(text="▶ 开始监控", bg="#27ae60")
+            self.status_label.config(text="● 系统就绪", fg="#bdc3c7")
 
     def monitor_thread(self):
         while self.is_monitoring:
             if self.config["block_reg"] and self.engine.has_any_text(self.config["block_reg"]):
-                self.root.after(0, lambda: self.status_label.config(text="● 干扰中(停止识别)", fg="red"))
-                time.sleep(1.0); continue
+                self.root.after(0, lambda: self.status_label.config(text="● 受到遮挡干扰", fg="#e67e22"))
+                time.sleep(1.2); continue
 
             if self.engine.check_detail_flag(self.config["icon_reg"]):
                 p_name = self.engine.recognize(self.config["name_reg"], True)
                 if p_name != "未知玩家":
-                    # 识别全队武将
                     teams = [self.engine.recognize(r) for r in self.config["gen_regs"]]
-                    
-                    # --- 已移除大营存在检查 ---
                     final_name = self.handle_name_logic(p_name)
                     self.db.save_record(final_name, teams)
                     self.root.after(0, self.refresh_player_list)
-                    self.root.after(0, lambda: self.status_label.config(text=f"● 录入: {final_name}", fg="#27ae60"))
+                    self.root.after(0, lambda: self.status_label.config(text=f"● 已录入: {final_name}", fg="#2ecc71"))
             else:
-                self.root.after(0, lambda: self.status_label.config(text="● 等待战报详情页...", fg="#f39c12"))
+                self.root.after(0, lambda: self.status_label.config(text="● 等待战报页面...", fg="#f1c40f"))
             time.sleep(1.5)
 
     def handle_name_logic(self, name):
@@ -342,7 +385,7 @@ class App:
             self.player_list.selection_set(item)
             name = self.player_list.item(item)["values"][0]
             menu = Menu(self.root, tearoff=0)
-            menu.add_command(label=f"删除玩家: {name}", command=lambda: self.delete_player_action(name))
+            menu.add_command(label=f"❌ 删除玩家【{name}】", command=lambda: self.delete_player_action(name))
             menu.post(event.x_root, event.y_root)
 
     def show_team_menu(self, event):
@@ -351,17 +394,17 @@ class App:
             self.team_table.selection_set(item)
             data = self.team_table.item(item)["values"]
             menu = Menu(self.root, tearoff=0)
-            menu.add_command(label="删除此条阵容", command=lambda: self.delete_team_action(data[4]))
+            menu.add_command(label="🗑 删除此条战报记录", command=lambda: self.delete_team_action(data[4]))
             menu.post(event.x_root, event.y_root)
 
     def delete_player_action(self, name):
-        if messagebox.askyesno("确认", f"确定删除玩家【{name}】及其所有记录吗？"):
+        if messagebox.askyesno("确认", f"确定彻底删除玩家【{name}】吗？"):
             self.db.delete_player(name)
             self.refresh_player_list()
             self.team_table.delete(*self.team_table.get_children())
 
     def delete_team_action(self, thash):
-        if messagebox.askyesno("确认", "确定删除这条阵容记录吗？"):
+        if messagebox.askyesno("确认", "确定删除该阵容记录？"):
             self.db.delete_team(thash)
             self.on_player_select(None)
 
@@ -375,18 +418,20 @@ class App:
         self.team_table.delete(*self.team_table.get_children())
         with sqlite3.connect(self.db.db_name) as conn:
             data = conn.execute("SELECT team_json, first_seen, team_hash FROM teams WHERE player_name = ? ORDER BY first_seen DESC", (p_name,)).fetchall()
-            for tj, tt, th in data:
+            for i, (tj, tt, th) in enumerate(data):
                 t = json.loads(tj)
-                self.team_table.insert("", END, values=(tt, t[0], t[1], t[2], th))
+                tag = 'even' if i % 2 == 0 else 'odd'
+                self.team_table.insert("", END, values=(tt, t[0], t[1], t[2], th), tags=(tag,))
+        self.team_table.tag_configure('odd', background='#f9f9f9')
 
     def select_area(self):
-        win = Toplevel(); win.attributes('-fullscreen', True, '-alpha', 0.3)
-        c = Canvas(win, cursor="cross"); c.pack(fill=BOTH, expand=True)
+        win = Toplevel(); win.attributes('-fullscreen', True, '-alpha', 0.25)
+        c = Canvas(win, cursor="cross", bg="black"); c.pack(fill=BOTH, expand=True)
         res = {"v": None}; self.sx = self.sy = 0; self.rect = None
         def on_down(e): self.sx, self.sy = e.x, e.y
         def on_move(e):
             if self.rect: c.delete(self.rect)
-            self.rect = c.create_rectangle(self.sx, self.sy, e.x, e.y, outline="green", width=2)
+            self.rect = c.create_rectangle(self.sx, self.sy, e.x, e.y, outline="#2ecc71", width=3)
         def on_up(e):
             res["v"] = (min(self.sx, e.x), min(self.sy, e.y), abs(e.x-self.sx), abs(e.y-self.sy))
             win.destroy()
