@@ -12,9 +12,10 @@ import threading
 import difflib
 import re
 import hashlib
+import csv
 from datetime import datetime
 from tkinter import *
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk, ImageGrab
 
 # ==================== 1. 配置与规则 ====================
@@ -49,6 +50,11 @@ class DatabaseManager:
             c.execute("CREATE TABLE IF NOT EXISTS players (name TEXT PRIMARY KEY, last_seen TIMESTAMP)")
             c.execute("CREATE TABLE IF NOT EXISTS teams (player_name TEXT, team_json TEXT, team_hash TEXT PRIMARY KEY, first_seen TIMESTAMP)")
             c.execute("CREATE TABLE IF NOT EXISTS trust_list (name TEXT PRIMARY KEY)")
+            
+            try:
+                c.execute("SELECT note FROM teams LIMIT 1")
+            except sqlite3.OperationalError:
+                c.execute("ALTER TABLE teams ADD COLUMN note TEXT DEFAULT ''")
             conn.commit()
 
     def get_all_player_names(self):
@@ -91,6 +97,12 @@ class DatabaseManager:
         with sqlite3.connect(self.db_name) as conn:
             conn.execute("DELETE FROM teams WHERE team_hash = ?", (team_hash,))
             conn.commit()
+    
+    def update_team(self, team_hash, new_team_list, new_note):
+        with sqlite3.connect(self.db_name) as conn:
+            conn.execute("UPDATE teams SET team_json = ?, note = ? WHERE team_hash = ?", 
+                         (json.dumps(new_team_list, ensure_ascii=False), new_note, team_hash))
+            conn.commit()
 
     def save_record(self, player_name, team_list):
         while len(team_list) < 3: team_list.append("未知 · 未知")
@@ -100,10 +112,122 @@ class DatabaseManager:
         with sqlite3.connect(self.db_name) as conn:
             c = conn.cursor()
             c.execute("INSERT OR REPLACE INTO players VALUES (?, ?)", (player_name, now))
-            c.execute("INSERT OR IGNORE INTO teams VALUES (?, ?, ?, ?)", (player_name, json.dumps(team_list, ensure_ascii=False), team_hash, now))
+            c.execute("INSERT OR IGNORE INTO teams (player_name, team_json, team_hash, first_seen, note) VALUES (?, ?, ?, ?, ?)", 
+                      (player_name, json.dumps(team_list, ensure_ascii=False), team_hash, now, ""))
             conn.commit()
 
+    def export_to_csv(self, filename):
+        with sqlite3.connect(self.db_name) as conn:
+            sql = """
+            SELECT t.player_name, t.first_seen, t.team_json, t.note, tr.name 
+            FROM teams t 
+            LEFT JOIN trust_list tr ON t.player_name = tr.name
+            ORDER BY t.first_seen DESC
+            """
+            rows = conn.execute(sql).fetchall()
+        try:
+            with open(filename, 'w', newline='', encoding='utf-8-sig') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['玩家名称', '是否白名单', '记录时间', '大营', '中军', '前锋', '备注'])
+                for row in rows:
+                    p_name, f_seen, t_json, note, trusted_name = row
+                    is_trusted = "是" if trusted_name else "否"
+                    try:
+                        gens = json.loads(t_json)
+                        while len(gens) < 3: gens.append("未知")
+                    except:
+                        gens = ["未知", "未知", "未知"]
+                    writer.writerow([p_name, is_trusted, f_seen, gens[0], gens[1], gens[2], note])
+            return True, f"成功导出 {len(rows)} 条记录"
+        except Exception as e:
+            return False, str(e)
+
+    def import_from_csv(self, filename):
+        count = 0
+        try:
+            with open(filename, 'r', encoding='utf-8-sig') as csvfile:
+                reader = csv.reader(csvfile)
+                header = next(reader, None)
+                if not header: return False, "空文件"
+                with sqlite3.connect(self.db_name) as conn:
+                    c = conn.cursor()
+                    for row in reader:
+                        if len(row) < 7: continue
+                        p_name = row[0].strip()
+                        is_trusted = row[1].strip()
+                        f_seen = row[2].strip()
+                        gens = [row[3].strip(), row[4].strip(), row[5].strip()]
+                        note = row[6].strip()
+                        if not p_name: continue
+                        if is_trusted == "是":
+                            c.execute("INSERT OR IGNORE INTO trust_list VALUES (?)", (p_name,))
+                        c.execute("INSERT OR REPLACE INTO players VALUES (?, ?)", (p_name, f_seen))
+                        names_only = [t.split(" · ")[1] if " · " in t else t for t in gens]
+                        team_hash = hashlib.md5(f"{p_name}{''.join(names_only)}".encode('utf-8')).hexdigest()
+                        team_json = json.dumps(gens, ensure_ascii=False)
+                        c.execute("""
+                            INSERT INTO teams (player_name, team_json, team_hash, first_seen, note) 
+                            VALUES (?, ?, ?, ?, ?)
+                            ON CONFLICT(team_hash) DO UPDATE SET note = excluded.note
+                        """, (p_name, team_json, team_hash, f_seen, note))
+                        count += 1
+                    conn.commit()
+            return True, f"成功导入 {count} 条记录"
+        except Exception as e:
+            return False, f"导入失败: {e}"
+
 # ==================== 3. 弹窗 UI ====================
+
+class AboutDialog(Toplevel):
+    """【新增】关于页面，你可以在此处自由编辑文字内容"""
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("关于率土情报管家")
+        self.geometry("480x500")
+        self.configure(bg="#ffffff")
+        self.resizable(False, False)
+
+        # --- 这里可以自由编辑内容 ---
+        self.info_text = """
+                        ━━━━━━━━━━━━━━━━━━━━━━━━━━
+                        🏰 率土情报管家 v1.2 
+                        ━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+            【核心功能】
+            1. 实时监控：自动识别战报中的敌方阵容及玩家信息。
+            2. 智能校对：内置武将库与相似度算法，自动修正OCR错词。
+            3. 数据沉淀：支持备注记录、多战报合并、白名单管理。
+            4. 自由交互：支持 Excel 格式导入导出，方便多端同步。
+
+            【使用须知】
+            ● 建议在游戏窗口化模式下使用，效果最佳。
+            ● 识别武将时，请先拉取一个能覆盖三名武将的长方形区域。
+            ● 若遇到生僻字无法识别，可在‘武将列表.txt’中手动添加。
+
+            【开发者信息】
+            开发者：天丨暗星
+            版本更新日期：2025年12月
+            联系/反馈：[info@rmer-hy.ip-ddns.com]
+
+            [ 本程序仅供技术交流学习使用，严禁用于任何非法目的 ]
+"""
+        
+        # UI 布局
+        header = Label(self, text="ℹ️ 软件关于与帮助", font=("微软雅黑", 14, "bold"), bg="#2c3e50", fg="white", pady=15)
+        header.pack(fill=X)
+
+        text_area = Text(self, font=("微软雅黑", 10), bg="#ffffff", relief=FLAT, padx=25, pady=20, spacing1=5)
+        text_area.insert(END, self.info_text)
+        text_area.config(state=DISABLED) # 设置为只读
+        text_area.pack(fill=BOTH, expand=True)
+
+        footer_btn = ttk.Button(self, text="我知道了", command=self.destroy)
+        footer_btn.pack(pady=15)
+        
+        # 模态窗口设置
+        self.transient(parent)
+        self.grab_set()
+
 class SimilarityDialog(Toplevel):
     def __init__(self, parent, new_name, old_name):
         super().__init__(parent)
@@ -138,7 +262,6 @@ class TrustManager(Toplevel):
         self.callback = callback
         
         Label(self, text="🛡 已信任的玩家 ID", font=("微软雅黑", 11, "bold"), pady=10).pack()
-        
         self.listbox = Listbox(self, font=("微软雅黑", 10), selectbackground="#3498db", borderwidth=0, highlightthickness=1)
         self.listbox.pack(fill=BOTH, expand=True, padx=20, pady=5)
         
@@ -156,6 +279,49 @@ class TrustManager(Toplevel):
         name = self.listbox.get(sel[0])
         self.db.remove_from_trust(name)
         self.refresh()
+
+class EditTeamDialog(Toplevel):
+    def __init__(self, parent, db, team_hash, current_data, callback):
+        super().__init__(parent)
+        self.title("编辑阵容与备注")
+        self.geometry("500x350")
+        self.db, self.team_hash, self.callback = db, team_hash, callback
+        self.configure(bg="#ecf0f1")
+        self.gens = [current_data[1], current_data[2], current_data[3]]
+        self.note_txt = current_data[5]
+
+        Label(self, text="✏️ 修改阵容信息", font=("微软雅黑", 12, "bold"), bg="#ecf0f1").pack(pady=15)
+        self.entries = []
+        labels = ["大营", "中军", "前锋"]
+        input_frame = Frame(self, bg="#ecf0f1")
+        input_frame.pack(pady=5)
+
+        for i in range(3):
+            f = Frame(input_frame, bg="#ecf0f1")
+            f.pack(fill=X, pady=5)
+            Label(f, text=f"{labels[i]}:", width=6, bg="#ecf0f1", anchor=E).pack(side=LEFT)
+            e = ttk.Entry(f, width=30)
+            e.insert(0, self.gens[i])
+            e.pack(side=LEFT, padx=10)
+            self.entries.append(e)
+
+        Label(self, text="📝 备注 / 战法提示", font=("微软雅黑", 10, "bold"), bg="#ecf0f1").pack(pady=(20, 5))
+        self.note_entry = ttk.Entry(self, width=45)
+        self.note_entry.insert(0, self.note_txt)
+        self.note_entry.pack()
+
+        btn_f = Frame(self, bg="#ecf0f1")
+        btn_f.pack(pady=25)
+        ttk.Button(btn_f, text="保存修改", command=self.save).pack(side=LEFT, padx=10)
+        ttk.Button(btn_f, text="取消", command=self.destroy).pack(side=LEFT, padx=10)
+        self.transient(parent); self.grab_set()
+
+    def save(self):
+        new_gens = [e.get().strip() for e in self.entries]
+        new_note = self.note_entry.get().strip()
+        self.db.update_team(self.team_hash, new_gens, new_note)
+        self.callback()
+        self.destroy()
 
 # ==================== 4. 识别引擎 ====================
 class RecognitionEngine:
@@ -209,8 +375,8 @@ class RecognitionEngine:
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("率土情报管家 v1.0")
-        self.root.geometry("1200x800")
+        self.root.title("率土情报管家 v1.2 (专业CSV版)")
+        self.root.geometry("1280x800")
         self.root.configure(bg="#f5f6f7")
         
         self.db = DatabaseManager()
@@ -227,14 +393,10 @@ class App:
     def _set_style(self):
         style = ttk.Style()
         style.theme_use('clam')
-        
-        # 定义配色
         style.configure("Treeview", font=("微软雅黑", 10), rowheight=30, background="white", fieldbackground="white")
         style.map("Treeview", background=[('selected', '#3498db')])
         style.configure("Treeview.Heading", font=("微软雅黑", 10, "bold"), background="#ecf0f1", foreground="#2c3e50")
-        
         style.configure("Action.TButton", font=("微软雅黑", 9))
-        style.configure("TEntry", padding=5)
 
     def _load_saved_config(self):
         if os.path.exists(self.config_file):
@@ -264,7 +426,12 @@ class App:
                                         ("3. 框武将", self.set_gen_regs_auto), ("4. 框干扰", self.set_block_reg)]):
             ttk.Button(btn_f, text=txt, command=cmd, style="Action.TButton", width=10).pack(side=LEFT, padx=3)
         
-        ttk.Button(btn_f, text="🛡 白名单", command=self.open_trust_mgr, width=10).pack(side=LEFT, padx=15)
+        ttk.Button(btn_f, text="🛡 白名单", command=self.open_trust_mgr, width=8).pack(side=LEFT, padx=10)
+        ttk.Button(btn_f, text="⬇ 导入数据", command=self.import_action, width=10).pack(side=LEFT, padx=5)
+        ttk.Button(btn_f, text="⬆ 导出数据", command=self.export_action, width=10).pack(side=LEFT, padx=5)
+        
+        # 新增关于按钮
+        ttk.Button(btn_f, text="ℹ 关于", command=self.show_about_dialog, width=8).pack(side=LEFT, padx=5)
 
         self.btn_run = Button(top_bar, text="▶ 开始监控", bg="#27ae60", fg="white", font=("微软雅黑", 10, "bold"), 
                              command=self.toggle, width=15, relief=FLAT, cursor="hand2")
@@ -280,7 +447,6 @@ class App:
         pw = PanedWindow(main_frame, orient=HORIZONTAL, bg="#dcdde1", sashwidth=4)
         pw.pack(fill=BOTH, expand=True)
         
-        # 左侧列表：玩家库
         left_f = Frame(pw, bg="white")
         pw.add(left_f, width=320)
         
@@ -298,27 +464,34 @@ class App:
         self.player_list.bind("<<TreeviewSelect>>", self.on_player_select)
         self.player_list.bind("<Button-3>", self.show_player_menu)
         
-        # 右侧列表：阵容详情
         right_f = Frame(pw, bg="white")
         pw.add(right_f)
         
-        detail_title = Label(right_f, text="🗃 侦察记录详情", font=("微软雅黑", 11, "bold"), bg="white", fg="#34495e", pady=10)
+        detail_title = Label(right_f, text="🗃 侦察记录详情 (双击行可编辑阵容/备注)", font=("微软雅黑", 11, "bold"), bg="white", fg="#34495e", pady=10)
         detail_title.pack(anchor=W, padx=15)
 
-        self.team_table = ttk.Treeview(right_f, columns=("time", "b", "m", "f", "hash"), show="headings")
+        self.team_table = ttk.Treeview(right_f, columns=("time", "b", "m", "f", "note", "hash"), show="headings")
         self.team_table.heading("time", text="记录时间")
         self.team_table.heading("b", text="大营"); self.team_table.heading("m", text="中军"); self.team_table.heading("f", text="前锋")
-        self.team_table.column("time", width=160, anchor=CENTER)
-        self.team_table.column("b", width=120, anchor=CENTER); self.team_table.column("m", width=120, anchor=CENTER); self.team_table.column("f", width=120, anchor=CENTER)
+        self.team_table.heading("note", text="备注")
+        
+        self.team_table.column("time", width=140, anchor=CENTER)
+        self.team_table.column("b", width=110, anchor=CENTER)
+        self.team_table.column("m", width=110, anchor=CENTER)
+        self.team_table.column("f", width=110, anchor=CENTER)
+        self.team_table.column("note", width=150, anchor=W)
         self.team_table.column("hash", width=0, stretch=NO)
         
         self.team_table.pack(fill=BOTH, expand=True, padx=10, pady=5)
         self.team_table.bind("<Button-3>", self.show_team_menu)
+        self.team_table.bind("<Double-1>", self.on_team_double_click)
         
-        # 底部美化
-        footer = Label(self.root, text="操作提示：右键点击列表项可进行删除 | 建议保持游戏窗口置顶", 
+        footer = Label(self.root, text="操作提示：右键可删除，双击可编辑备注 | 本工具由 Gemini AI 辅助开发", 
                        font=("微软雅黑", 8), fg="#95a5a6", bg="#f5f6f7", pady=5)
         footer.pack()
+
+    def show_about_dialog(self):
+        AboutDialog(self.root)
 
     def refresh_player_list(self):
         search_term = self.search_var.get().strip().lower()
@@ -360,21 +533,31 @@ class App:
             time.sleep(1.5)
 
     def handle_name_logic(self, name):
-        if self.db.is_trusted(name): return name
+        # 1. 如果新名字直接就在白名单，直接通过
+        if self.db.is_trusted(name): 
+            return name
+            
         all_names = self.db.get_all_player_names()
         for old in all_names:
             ratio = difflib.SequenceMatcher(None, name, old).ratio()
+            # 2. 如果发现相似名字
             if 0.75 <= ratio < 1.0:
+                # 【关键修复】：如果这个相似的旧名字已经由于之前的“不再询问”被列入白名单
+                # 则直接判定为该旧名字，不再弹窗
+                if self.db.is_trusted(old):
+                    return old
+                
+                # 否则，弹出对话框询问
                 dialog = SimilarityDialog(self.root, name, old)
                 self.root.wait_window(dialog)
                 if dialog.result:
                     action, trust = dialog.result
                     if action == "use_new":
+                        if trust: self.db.add_to_trust(name) # 以后看到这个新名不再问
                         self.db.rename_player(old, name)
-                        if trust: self.db.add_to_trust(name)
                         return name
                     else:
-                        if trust: self.db.add_to_trust(old)
+                        if trust: self.db.add_to_trust(old)  # 以后看到类似这个旧名的都不再问
                         return old
                 break
         return name
@@ -394,8 +577,20 @@ class App:
             self.team_table.selection_set(item)
             data = self.team_table.item(item)["values"]
             menu = Menu(self.root, tearoff=0)
-            menu.add_command(label="🗑 删除此条战报记录", command=lambda: self.delete_team_action(data[4]))
+            menu.add_command(label="✏️ 编辑阵容/备注", command=lambda: self.open_edit_dialog(data))
+            menu.add_separator()
+            menu.add_command(label="🗑 删除此条战报记录", command=lambda: self.delete_team_action(data[5]))
             menu.post(event.x_root, event.y_root)
+
+    def on_team_double_click(self, event):
+        item = self.team_table.identify_row(event.y)
+        if item:
+            data = self.team_table.item(item)["values"]
+            self.open_edit_dialog(data)
+
+    def open_edit_dialog(self, data):
+        formatted_data = [data[0], data[1], data[2], data[3], data[5], data[4]] 
+        EditTeamDialog(self.root, self.db, data[5], formatted_data, lambda: self.on_player_select(None))
 
     def delete_player_action(self, name):
         if messagebox.askyesno("确认", f"确定彻底删除玩家【{name}】吗？"):
@@ -411,23 +606,43 @@ class App:
     def open_trust_mgr(self):
         TrustManager(self.root, self.db, None)
 
+    def export_action(self):
+        path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV Files", "*.csv")])
+        if path:
+            success, msg = self.db.export_to_csv(path)
+            if success: messagebox.showinfo("成功", msg)
+            else: messagebox.showerror("失败", msg)
+
+    def import_action(self):
+        path = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv")])
+        if path:
+            success, msg = self.db.import_from_csv(path)
+            if success:
+                self.refresh_player_list()
+                self.team_table.delete(*self.team_table.get_children())
+                messagebox.showinfo("成功", msg)
+            else: messagebox.showerror("失败", msg)
+
     def on_player_select(self, e):
         sel = self.player_list.selection()
         if not sel: return
         p_name = self.player_list.item(sel[0])["values"][0]
         self.team_table.delete(*self.team_table.get_children())
         with sqlite3.connect(self.db.db_name) as conn:
-            data = conn.execute("SELECT team_json, first_seen, team_hash FROM teams WHERE player_name = ? ORDER BY first_seen DESC", (p_name,)).fetchall()
-            for i, (tj, tt, th) in enumerate(data):
-                t = json.loads(tj)
+            data = conn.execute("SELECT team_json, first_seen, team_hash, note FROM teams WHERE player_name = ? ORDER BY first_seen DESC", (p_name,)).fetchall()
+            for i, (tj, tt, th, note) in enumerate(data):
+                try: t = json.loads(tj)
+                except: t = ["未知", "未知", "未知"]
                 tag = 'even' if i % 2 == 0 else 'odd'
-                self.team_table.insert("", END, values=(tt, t[0], t[1], t[2], th), tags=(tag,))
+                self.team_table.insert("", END, values=(tt, t[0], t[1], t[2], note, th), tags=(tag,))
         self.team_table.tag_configure('odd', background='#f9f9f9')
 
     def select_area(self):
         win = Toplevel(); win.attributes('-fullscreen', True, '-alpha', 0.25)
         c = Canvas(win, cursor="cross", bg="black"); c.pack(fill=BOTH, expand=True)
-        res = {"v": None}; self.sx = self.sy = 0; self.rect = None
+        res = {"v": None}
+        self.sx = self.sy = 0
+        self.rect = None
         def on_down(e): self.sx, self.sy = e.x, e.y
         def on_move(e):
             if self.rect: c.delete(self.rect)
@@ -439,9 +654,12 @@ class App:
         self.root.wait_window(win)
         return res["v"]
 
-    def set_icon_reg(self): self.root.iconify(); self.config["icon_reg"] = self.select_area(); self.root.deiconify(); self._save_config()
-    def set_name_reg(self): self.root.iconify(); self.config["name_reg"] = self.select_area(); self.root.deiconify(); self._save_config()
-    def set_block_reg(self): self.root.iconify(); self.config["block_reg"] = self.select_area(); self.root.deiconify(); self._save_config()
+    def set_icon_reg(self): 
+        self.root.iconify(); self.config["icon_reg"] = self.select_area(); self.root.deiconify(); self._save_config()
+    def set_name_reg(self): 
+        self.root.iconify(); self.config["name_reg"] = self.select_area(); self.root.deiconify(); self._save_config()
+    def set_block_reg(self): 
+        self.root.iconify(); self.config["block_reg"] = self.select_area(); self.root.deiconify(); self._save_config()
     def set_gen_regs_auto(self):
         self.root.iconify(); r = self.select_area(); self.root.deiconify()
         if r:
@@ -450,4 +668,6 @@ class App:
             self._save_config()
 
 if __name__ == "__main__":
-    tk_root = Tk(); app = App(tk_root); tk_root.mainloop()
+    tk_root = Tk()
+    app = App(tk_root)
+    tk_root.mainloop()
